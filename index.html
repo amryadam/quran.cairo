@@ -1,1 +1,505 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>إذاعة القرآن الكريم - البث المباشر</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            text-align: center;
+            max-width: 500px;
+            width: 100%;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 28px;
+            font-weight: 600;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 10px 20px;
+            border-radius: 25px;
+            margin: 20px 0;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .status.playing {
+            background: #10b981;
+            color: white;
+        }
+
+        .status.loading {
+            background: #f59e0b;
+            color: white;
+        }
+
+        .status.error {
+            background: #ef4444;
+            color: white;
+        }
+
+        .status.offline {
+            background: #6b7280;
+            color: white;
+        }
+
+        .controls {
+            margin-top: 30px;
+        }
+
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            border-radius: 50px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        button:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .info {
+            margin-top: 20px;
+            color: #666;
+            font-size: 12px;
+        }
+
+        .start-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            cursor: pointer;
+            transition: opacity 0.5s ease;
+        }
+
+        .start-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .start-content {
+            text-align: center;
+            color: white;
+        }
+
+        .start-content h2 {
+            font-size: 36px;
+            margin-bottom: 20px;
+            animation: pulse 2s infinite;
+        }
+
+        .start-content p {
+            font-size: 18px;
+            opacity: 0.8;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        .wave {
+            display: inline-block;
+            margin: 20px 0;
+            height: 40px;
+            min-height: 40px;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+        }
+
+        .wave span {
+            display: inline-block;
+            width: 4px;
+            height: 20px;
+            margin: 0 2px;
+            background: #667eea;
+            animation: wave 1.2s infinite ease-in-out;
+            transform-origin: bottom;
+        }
+
+        .wave span:nth-child(2) { animation-delay: -1.1s; }
+        .wave span:nth-child(3) { animation-delay: -1.0s; }
+        .wave span:nth-child(4) { animation-delay: -0.9s; }
+        .wave span:nth-child(5) { animation-delay: -0.8s; }
+
+        @keyframes wave {
+            0%, 40%, 100% { 
+                transform: scaleY(1);
+            }
+            20% { 
+                transform: scaleY(2);
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Click to Start Overlay -->
+    <div class="start-overlay" id="startOverlay" onclick="startRadio()">
+        <div class="start-content">
+            <h2>🕌 إذاعة القرآن الكريم</h2>
+            <p>انقر في أي مكان للبدء</p>
+            <p style="font-size: 14px; margin-top: 10px; opacity: 0.6;">Click anywhere to start</p>
+        </div>
+    </div>
+
+    <div class="container">
+        <h1>🕌 إذاعة القرآن الكريم</h1>
+        <p style="color: #666; margin-bottom: 20px;">من القاهرة - البث المباشر</p>
+        
+        <div class="wave" id="waveAnimation" style="display: none;">
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+        </div>
+        
+        <div class="status loading" id="status">جاري التحميل...</div>
+        
+        <div class="controls">
+            <button id="playButton" onclick="togglePlay()">▶️ تشغيل</button>
+        </div>
+        
+        <div class="info">
+            البث المباشر • إعادة محاولة تلقائية لا نهائية عند انقطاع الاتصال
+        </div>
+    </div>
+
+    <audio id="radioPlayer" preload="auto">
+        <source src="https://n0a.radiojar.com/8s5u5tpdtwzuv?rj-ttl=5&rj-tok=AAABfGwn9tsAO9sHl0eCkCvECQ" type="audio/mpeg">
+        <source src="https://stream.radiojar.com/8s5u5tpdtwzuv" type="audio/mpeg">
+    </audio>
+
+    <script>
+        const audio = document.getElementById('radioPlayer');
+        const status = document.getElementById('status');
+        const playButton = document.getElementById('playButton');
+        const waveAnimation = document.getElementById('waveAnimation');
+        const startOverlay = document.getElementById('startOverlay');
+        
+        let isOnline = true; // Assume online initially
+        let retryTimeout = null;
+        let retryCount = 0;
+        const retryDelay = 3000; // 3 seconds
+        let hasStarted = false;
+        let connectivityCheckInterval = null;
+        let lastSuccessfulCheck = Date.now();
+        
+        // Check actual internet connectivity (not just local network)
+        async function checkInternetConnectivity() {
+            try {
+                // Try to fetch a small resource from the radio server
+                // Add timestamp to prevent caching
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+                
+                const response = await fetch('https://stream.radiojar.com/8s5u5tpdtwzuv', {
+                    method: 'HEAD',
+                    mode: 'no-cors', // Avoid CORS issues
+                    cache: 'no-cache',
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                lastSuccessfulCheck = Date.now();
+                return true;
+            } catch (error) {
+                console.log('Internet connectivity check failed:', error.message);
+                // If we haven't had a successful check in 15 seconds, consider offline
+                return (Date.now() - lastSuccessfulCheck) < 15000;
+            }
+        }
+        
+        // Periodic connectivity monitoring
+        function startConnectivityMonitoring() {
+            if (connectivityCheckInterval) return;
+            
+            connectivityCheckInterval = setInterval(async () => {
+                const wasOnline = isOnline;
+                isOnline = await checkInternetConnectivity();
+                
+                // Status changed from offline to online
+                if (!wasOnline && isOnline) {
+                    console.log('Internet connectivity restored');
+                    handleOnline();
+                }
+                // Status changed from online to offline
+                else if (wasOnline && !isOnline) {
+                    console.log('Internet connectivity lost');
+                    handleOffline();
+                }
+            }, 5000); // Check every 5 seconds
+        }
+        
+        function stopConnectivityMonitoring() {
+            if (connectivityCheckInterval) {
+                clearInterval(connectivityCheckInterval);
+                connectivityCheckInterval = null;
+            }
+        }
+
+        // Handle online event
+        function handleOnline() {
+            updateStatus('loading', 'الاتصال متاح - جاري إعادة التشغيل...');
+            retryCount = 0;
+            setTimeout(() => {
+                if (hasStarted) {
+                    playAudio();
+                }
+            }, 1000);
+        }
+        
+        // Handle offline event
+        function handleOffline() {
+            audio.pause();
+            updateStatus('offline', '❌ لا يوجد اتصال بالإنترنت');
+            if (retryTimeout) clearTimeout(retryTimeout);
+        }
+
+        // Start radio function (called when user clicks overlay)
+        function startRadio() {
+            if (hasStarted) return;
+            hasStarted = true;
+            
+            // Hide overlay
+            startOverlay.classList.add('hidden');
+            
+            // Start connectivity monitoring
+            startConnectivityMonitoring();
+            
+            // Start playing
+            playAudio();
+            
+            // Remove overlay after animation
+            setTimeout(() => {
+                startOverlay.style.display = 'none';
+            }, 500);
+        }
+
+        // Update status display
+        function updateStatus(state, message) {
+            status.className = `status ${state}`;
+            status.textContent = message;
+            
+            if (state === 'playing') {
+                waveAnimation.style.display = 'inline-block';
+                playButton.textContent = '⏸️ إيقاف مؤقت';
+            } else {
+                waveAnimation.style.display = 'none';
+                playButton.textContent = '▶️ تشغيل';
+            }
+        }
+
+        // Play audio
+        function playAudio() {
+            audio.load(); // Reload the stream
+            const playPromise = audio.play();
+            
+            if (playPromise !== undefined) {
+                playPromise
+                    .then(() => {
+                        updateStatus('playing', '🎵 البث مباشر الآن');
+                        retryCount = 0;
+                    })
+                    .catch(error => {
+                        console.error('Playback error:', error);
+                        updateStatus('error', 'خطأ في التشغيل - جاري المحاولة مرة أخرى...');
+                        retryConnection();
+                    });
+            }
+        }
+
+        // Pause audio
+        function pauseAudio() {
+            audio.pause();
+            updateStatus('loading', 'متوقف مؤقتاً');
+        }
+
+        // Toggle play/pause
+        function togglePlay() {
+            if (audio.paused) {
+                playAudio();
+            } else {
+                pauseAudio();
+            }
+        }
+
+        // Retry connection (infinite retries)
+        function retryConnection() {
+            if (retryTimeout) clearTimeout(retryTimeout);
+            
+            if (isOnline) {
+                retryCount++;
+                updateStatus('loading', `إعادة المحاولة (${retryCount})...`);
+                
+                retryTimeout = setTimeout(() => {
+                    playAudio();
+                }, retryDelay);
+            }
+        }
+
+        // Handle browser online/offline events (as backup)
+        window.addEventListener('online', () => {
+            console.log('Browser detected network online');
+            // Immediately check if we have actual internet connectivity
+            checkInternetConnectivity().then(online => {
+                if (online) {
+                    isOnline = true;
+                    handleOnline();
+                }
+            });
+        });
+
+        window.addEventListener('offline', () => {
+            console.log('Browser detected network offline');
+            isOnline = false;
+            handleOffline();
+        });
+
+        // Audio event listeners
+        audio.addEventListener('playing', () => {
+            updateStatus('playing', '🎵 البث مباشر الآن');
+            // If audio is playing, we definitely have internet
+            isOnline = true;
+            lastSuccessfulCheck = Date.now();
+            retryCount = 0;
+        });
+
+        audio.addEventListener('waiting', () => {
+            updateStatus('loading', 'جاري التحميل...');
+        });
+
+        audio.addEventListener('pause', () => {
+            if (!audio.ended && hasStarted) {
+                updateStatus('loading', 'متوقف مؤقتاً');
+            }
+        });
+
+        audio.addEventListener('error', (e) => {
+            console.error('Audio error:', e);
+            
+            // Check connectivity when error occurs
+            checkInternetConnectivity().then(online => {
+                isOnline = online;
+                if (online) {
+                    updateStatus('error', 'خطأ في البث - جاري إعادة المحاولة...');
+                    retryConnection();
+                } else {
+                    updateStatus('offline', '❌ لا يوجد اتصال بالإنترنت');
+                }
+            });
+        });
+
+        audio.addEventListener('stalled', () => {
+            console.log('Audio stalled');
+            if (hasStarted && !audio.paused) {
+                // Check if we still have internet
+                checkInternetConnectivity().then(online => {
+                    isOnline = online;
+                    if (online) {
+                        retryConnection();
+                    } else {
+                        handleOffline();
+                    }
+                });
+            }
+        });
+
+        audio.addEventListener('loadstart', () => {
+            if (hasStarted) {
+                updateStatus('loading', 'جاري الاتصال...');
+            }
+        });
+
+        // Auto-start on page load (try without user interaction)
+        window.addEventListener('load', () => {
+            // Try to start automatically (will work in some browsers/situations)
+            const autoPlayPromise = audio.play();
+            
+            if (autoPlayPromise !== undefined) {
+                autoPlayPromise
+                    .then(() => {
+                        // Autoplay succeeded! Hide overlay
+                        hasStarted = true;
+                        startOverlay.classList.add('hidden');
+                        setTimeout(() => {
+                            startOverlay.style.display = 'none';
+                        }, 500);
+                        updateStatus('playing', '🎵 البث مباشر الآن');
+                        // Start monitoring connectivity
+                        startConnectivityMonitoring();
+                    })
+                    .catch(() => {
+                        // Autoplay blocked - overlay will remain visible
+                        console.log('Autoplay blocked - waiting for user interaction');
+                        updateStatus('loading', 'انقر للبدء');
+                    });
+            }
+        });
+
+        // Handle visibility change (tab switching)
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && isOnline && audio.paused && hasStarted) {
+                // Page became visible and audio is paused, try to resume
+                setTimeout(() => {
+                    playAudio();
+                }, 500);
+            }
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (retryTimeout) clearTimeout(retryTimeout);
+            stopConnectivityMonitoring();
+            audio.pause();
+        });
+    </script>
+</body>
+</html>
+
 
