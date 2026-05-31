@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>إذاعة القرآن الكريم - البث المباشر</title>
+    <!-- hls.js: needed to play the official misrquran.gov.eg HLS stream in Chrome.
+         If it fails to load (offline/blocked), the player falls back to the
+         radiojar MP3 source automatically. -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -66,6 +70,35 @@
         .status.offline {
             background: #6b7280;
             color: white;
+        }
+
+        /* Active-source indicator */
+        .source-label {
+            margin: 6px 0 0;
+            font-size: 13px;
+            color: #6b7280;
+            min-height: 18px;
+            transition: color 0.3s ease;
+        }
+
+        .source-label .dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-inline-start: 6px;
+            background: #9ca3af;
+            vertical-align: middle;
+        }
+
+        .source-label.live {
+            color: #047857;
+            font-weight: 600;
+        }
+
+        .source-label.live .dot {
+            background: #10b981;
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
         }
 
         .controls {
@@ -168,12 +201,24 @@
         .wave span:nth-child(5) { animation-delay: -0.8s; }
 
         @keyframes wave {
-            0%, 40%, 100% { 
+            0%, 40%, 100% {
                 transform: scaleY(1);
             }
-            20% { 
+            20% {
                 transform: scaleY(2);
             }
+        }
+
+        /* Off-screen media element (carries audio; hidden, not display:none so
+           audio keeps playing reliably on all browsers). */
+        #player {
+            position: fixed;
+            width: 1px;
+            height: 1px;
+            opacity: 0;
+            pointer-events: none;
+            bottom: 0;
+            left: 0;
         }
     </style>
 </head>
@@ -190,7 +235,7 @@
     <div class="container">
         <h1>🕌 إذاعة القرآن الكريم</h1>
         <p style="color: #666; margin-bottom: 20px;">من القاهرة - البث المباشر</p>
-        
+
         <div class="wave" id="waveAnimation" style="display: none;">
             <span></span>
             <span></span>
@@ -198,144 +243,149 @@
             <span></span>
             <span></span>
         </div>
-        
+
         <div class="status loading" id="status">جاري التحميل...</div>
-        
+        <div class="source-label" id="sourceLabel"><span class="dot"></span><span id="sourceText">—</span></div>
+
         <div class="controls">
             <button id="playButton" onclick="togglePlay()">▶️ تشغيل</button>
         </div>
-        
+
         <div class="info">
-            البث المباشر • إعادة محاولة تلقائية لا نهائية عند انقطاع الاتصال
+            البث المباشر • تبديل تلقائي بين المصادر وإعادة محاولة لا نهائية عند انقطاع الاتصال
         </div>
     </div>
 
-    <audio id="radioPlayer" preload="auto">
-        <source src="https://n0a.radiojar.com/8s5u5tpdtwzuv?rj-ttl=5&rj-tok=AAABfGwn9tsAO9sHl0eCkCvECQ" type="audio/mpeg">
-        <source src="https://n02.radiojar.com/8s5u5tpdtwzuv?rj-ttl=5&rj-tok=AAABmlil4fgAxbOpg5A8UZS87w" type="audio/mpeg">
-        <source src="https://stream.radiojar.com/8s5u5tpdtwzuv" type="audio/mpeg">
-    </audio>
+    <!-- Single media element for both HLS (via hls.js) and progressive MP3. -->
+    <video id="player" playsinline webkit-playsinline preload="auto"></video>
 
     <script>
-        const audio = document.getElementById('radioPlayer');
+        const player = document.getElementById('player');
         const status = document.getElementById('status');
         const playButton = document.getElementById('playButton');
         const waveAnimation = document.getElementById('waveAnimation');
         const startOverlay = document.getElementById('startOverlay');
-        
-        let isOnline = true; // Assume online initially
-        let retryTimeout = null;
-        let retryCount = 0;
-        const retryDelay = 3000; // 3 seconds
+        const sourceLabel = document.getElementById('sourceLabel');
+        const sourceText = document.getElementById('sourceText');
+
+        // ---- Sources (in priority order) -------------------------------------
+        // Official HLS first (authoritative .gov.eg), then radiojar as fallback.
+        // The official master .m3u8 is stable (it's the default hardcoded in the
+        // misrquran.gov.eg app bundle); only its inner variant rotates, which
+        // hls.js re-resolves on its own.
+        //
+        // radiojar fallback caveat: the tokenized node URLs play over HTTPS until
+        // their rj-tok expires; the tokenless stream.radiojar.com URL 302-redirects
+        // to plain HTTP and is blocked as mixed content on an HTTPS page. They are
+        // last-resort only — the official HLS above is the reliable source.
+        const SOURCES = [
+            {
+                name: 'القناة الرسمية — misrquran.gov.eg',
+                kind: 'hls',
+                url: 'https://service.webvideocore.net/CL1olYogIrDWvwqiIKK7eCxOS4PStqG9DuEjAr2ZjZQtvS3d4y9r0cvRhvS17SGN/a_7a4vuubc6mo8.m3u8'
+            },
+            {
+                name: 'راديوجار n0a (احتياطي)',
+                kind: 'mp3',
+                url: 'https://n0a.radiojar.com/8s5u5tpdtwzuv?rj-ttl=5&rj-tok=AAABfGwn9tsAO9sHl0eCkCvECQ'
+            },
+            {
+                name: 'راديوجار n02 (احتياطي)',
+                kind: 'mp3',
+                url: 'https://n02.radiojar.com/8s5u5tpdtwzuv?rj-ttl=5&rj-tok=AAABmlil4fgAxbOpg5A8UZS87w'
+            },
+            {
+                name: 'راديوجار (احتياطي)',
+                kind: 'mp3',
+                url: 'https://stream.radiojar.com/8s5u5tpdtwzuv'
+            }
+        ];
+
+        let currentSourceIndex = 0;
+        let triedThisRound = 0;     // sources tried since the last success
+
         let hasStarted = false;
-        let connectivityCheckInterval = null;
-        let lastSuccessfulCheck = Date.now();
-        
-        // Check actual internet connectivity (not just local network)
-        async function checkInternetConnectivity() {
-            const urls = [
-                'https://n0a.radiojar.com/8s5u5tpdtwzuv?rj-ttl=5&rj-tok=AAABfGwn9tsAO9sHl0eCkCvECQ',
-                'https://n02.radiojar.com/8s5u5tpdtwzuv?rj-ttl=5&rj-tok=AAABmlil4fgAxbOpg5A8UZS87w',
-                'https://stream.radiojar.com/8s5u5tpdtwzuv'
-            ];
-            
-            // Try each URL until one succeeds
-            for (const url of urls) {
-                try {
-                    const controller = new AbortController();
-                    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
-                    
-                    await fetch(url, {
-                        method: 'HEAD',
-                        mode: 'no-cors', // Avoid CORS issues
-                        cache: 'no-cache',
-                        signal: controller.signal
-                    });
-                    
-                    clearTimeout(timeoutId);
-                    lastSuccessfulCheck = Date.now();
-                    return true; // Success with this URL
-                } catch (error) {
-                    console.log(`Connectivity check failed for ${url}:`, error.message);
-                    // Try next URL
+        let retryTimeout = null;
+        let attemptTimeout = null;
+        let reconnecting = false;   // a reconnect round is in progress
+        let attemptPending = false; // a single source attempt awaits resolution
+        let hls = null;
+        let backoff = 2000;
+        const MAX_BACKOFF = 30000;
+        const ATTEMPT_LIMIT = 8000; // give up on one source attempt after 8s
+
+        // ---- Keep-awake -------------------------------------------------------
+        // On a plugged-in kiosk the real killer is Chrome freezing the page once
+        // playback stops (the media exemption vanishes the moment the stream
+        // drops — exactly when recovery must run). Fight it two ways: Wake Lock
+        // (keep screen on) + a muted canvas-stream video that keeps a media
+        // element "playing" so the page is never frozen even while audio is dead.
+        let wakeLock = null;
+        let keepAliveVideo = null;
+        let canvasDrawInterval = null;
+        let keepAwakeEnabled = false;
+
+        async function requestWakeLock() {
+            if (wakeLock) return;
+            try {
+                if ('wakeLock' in navigator) {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    wakeLock.addEventListener('release', () => { wakeLock = null; });
                 }
-            }
-            
-            // All URLs failed - check if we had a recent success (grace period)
-            return (Date.now() - lastSuccessfulCheck) < 15000;
-        }
-        
-        // Periodic connectivity monitoring
-        function startConnectivityMonitoring() {
-            if (connectivityCheckInterval) return;
-            
-            connectivityCheckInterval = setInterval(async () => {
-                const wasOnline = isOnline;
-                isOnline = await checkInternetConnectivity();
-                
-                // Status changed from offline to online
-                if (!wasOnline && isOnline) {
-                    console.log('Internet connectivity restored');
-                    handleOnline();
-                }
-                // Status changed from online to offline
-                else if (wasOnline && !isOnline) {
-                    console.log('Internet connectivity lost');
-                    handleOffline();
-                }
-            }, 5000); // Check every 5 seconds
-        }
-        
-        function stopConnectivityMonitoring() {
-            if (connectivityCheckInterval) {
-                clearInterval(connectivityCheckInterval);
-                connectivityCheckInterval = null;
+            } catch (e) {
+                console.log('Wake Lock unavailable:', e && e.message);
             }
         }
 
-        // Handle online event
-        function handleOnline() {
-            updateStatus('loading', 'الاتصال متاح - جاري إعادة التشغيل...');
-            retryCount = 0;
-            setTimeout(() => {
-                if (hasStarted) {
-                    playAudio();
-                }
-            }, 1000);
-        }
-        
-        // Handle offline event
-        function handleOffline() {
-            audio.pause();
-            updateStatus('offline', '❌ لا يوجد اتصال بالإنترنت');
-            if (retryTimeout) clearTimeout(retryTimeout);
+        function enableKeepAliveVideo() {
+            if (keepAliveVideo) return;
+            try {
+                const canvas = document.createElement('canvas');
+                canvas.width = 2;
+                canvas.height = 2;
+                const ctx = canvas.getContext('2d');
+                let flip = false;
+                canvasDrawInterval = setInterval(() => {
+                    flip = !flip;
+                    ctx.fillStyle = flip ? '#000000' : '#000001';
+                    ctx.fillRect(0, 0, 2, 2);
+                }, 1000);
+
+                const stream = canvas.captureStream(1);
+                keepAliveVideo = document.createElement('video');
+                keepAliveVideo.srcObject = stream;
+                keepAliveVideo.muted = true;
+                keepAliveVideo.playsInline = true;
+                keepAliveVideo.setAttribute('playsinline', '');
+                keepAliveVideo.loop = true;
+                keepAliveVideo.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;';
+                document.body.appendChild(keepAliveVideo);
+                keepAliveVideo.play().catch(() => {});
+            } catch (e) {
+                console.log('Keep-alive video unavailable:', e && e.message);
+            }
         }
 
-        // Start radio function (called when user clicks overlay)
-        function startRadio() {
-            if (hasStarted) return;
-            hasStarted = true;
-            
-            // Hide overlay
-            startOverlay.classList.add('hidden');
-            
-            // Start connectivity monitoring
-            startConnectivityMonitoring();
-            
-            // Start playing
-            playAudio();
-            
-            // Remove overlay after animation
-            setTimeout(() => {
-                startOverlay.style.display = 'none';
-            }, 500);
+        function enableKeepAwake() {
+            if (keepAwakeEnabled) return;
+            keepAwakeEnabled = true;
+            requestWakeLock();
+            enableKeepAliveVideo();
         }
 
-        // Update status display
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) return;
+            if (!hasStarted) return;
+            if (!wakeLock) requestWakeLock();
+            if (keepAliveVideo && keepAliveVideo.paused) keepAliveVideo.play().catch(() => {});
+            if (player.paused && !reconnecting) reconnect(); // died while away → revive
+        });
+
+        // ---- Status + source display -----------------------------------------
         function updateStatus(state, message) {
             status.className = `status ${state}`;
             status.textContent = message;
-            
+
             if (state === 'playing') {
                 waveAnimation.style.display = 'inline-block';
                 playButton.textContent = '⏸️ إيقاف مؤقت';
@@ -345,170 +395,295 @@
             }
         }
 
-        // Play audio
-        function playAudio() {
-            audio.load(); // Reload the stream
-            const playPromise = audio.play();
-            
-            if (playPromise !== undefined) {
-                playPromise
-                    .then(() => {
-                        updateStatus('playing', '🎵 البث مباشر الآن');
-                        retryCount = 0;
-                    })
-                    .catch(error => {
-                        console.error('Playback error:', error);
-                        updateStatus('error', 'خطأ في التشغيل - جاري المحاولة مرة أخرى...');
-                        retryConnection();
-                    });
+        function updateSourceLabel(src, live) {
+            sourceText.textContent = src ? `المصدر: ${src.name}` : '—';
+            sourceLabel.className = 'source-label' + (live ? ' live' : '');
+        }
+
+        function showStartOverlay(message) {
+            startOverlay.style.display = 'flex';
+            startOverlay.classList.remove('hidden');
+            if (message) updateStatus('loading', message);
+        }
+
+        function hideOverlay() {
+            startOverlay.classList.add('hidden');
+            setTimeout(() => { startOverlay.style.display = 'none'; }, 500);
+        }
+
+        // ---- Source / attempt engine -----------------------------------------
+        function clearRetry() {
+            if (retryTimeout) { clearTimeout(retryTimeout); retryTimeout = null; }
+        }
+
+        function teardownHls() {
+            if (hls) {
+                try { hls.destroy(); } catch (e) {}
+                hls = null;
             }
         }
 
-        // Pause audio
-        function pauseAudio() {
-            audio.pause();
-            updateStatus('loading', 'متوقف مؤقتاً');
+        function wrapIndex(i) {
+            return ((i % SOURCES.length) + SOURCES.length) % SOURCES.length;
         }
 
-        // Toggle play/pause
+        // Begin a reconnect round: try the current source, failing over to the
+        // next on each failure; once all sources fail, back off and start over.
+        function reconnect() {
+            if (!hasStarted || reconnecting) return;
+            reconnecting = true;
+            clearRetry();
+            triedThisRound = 0;
+            attemptSource(currentSourceIndex);
+        }
+
+        function attemptSource(i) {
+            currentSourceIndex = wrapIndex(i);
+            const src = SOURCES[currentSourceIndex];
+
+            attemptPending = true;
+            updateStatus('loading', 'جاري الاتصال...');
+            updateSourceLabel(src, false);
+
+            if (attemptTimeout) clearTimeout(attemptTimeout);
+            // Bound the attempt: navigator.onLine can be true while the fiber is
+            // down, in which case play()/HLS load may hang indefinitely.
+            attemptTimeout = setTimeout(() => resolveAttempt(false), ATTEMPT_LIMIT);
+
+            startAttempt(src);
+        }
+
+        function startAttempt(src) {
+            teardownHls();
+
+            if (src.kind === 'hls') {
+                if (window.Hls && window.Hls.isSupported()) {
+                    player.removeAttribute('src'); // let hls.js own the element via MSE
+                    hls = new window.Hls({
+                        enableWorker: true,
+                        backBufferLength: 30,
+                        manifestLoadingMaxRetry: 2,
+                        levelLoadingMaxRetry: 2,
+                        fragLoadingMaxRetry: 4
+                    });
+                    hls.on(window.Hls.Events.MANIFEST_PARSED, () => tryPlay());
+                    hls.on(window.Hls.Events.ERROR, (evt, data) => {
+                        if (!data || !data.fatal) return; // non-fatal: hls.js self-heals
+                        console.warn('hls.js fatal error:', data.type, data.details);
+                        if (attemptPending) resolveAttempt(false);
+                        else if (!reconnecting) reconnect(); // dropped mid-play
+                    });
+                    hls.attachMedia(player);
+                    hls.loadSource(src.url);
+                    return;
+                }
+                if (player.canPlayType('application/vnd.apple.mpegurl')) {
+                    player.src = src.url; // native HLS (Android Chrome / Safari)
+                    player.load();
+                    tryPlay();
+                    return;
+                }
+                // HLS not playable here → skip to next source
+                resolveAttempt(false);
+                return;
+            }
+
+            // Progressive MP3
+            player.src = src.url;
+            player.load();
+            tryPlay();
+        }
+
+        function tryPlay() {
+            const p = player.play();
+            if (p !== undefined) {
+                p.then(() => resolveAttempt(true)).catch((err) => resolveAttempt(false, err));
+            }
+            // else: resolved by the 'playing' event or the attempt timeout
+        }
+
+        // Resolve the current attempt exactly once, whatever fires first
+        // (play() promise, 'playing' event, media 'error', hls error, timeout).
+        function resolveAttempt(ok, err) {
+            if (!attemptPending) return;
+            attemptPending = false;
+            if (attemptTimeout) { clearTimeout(attemptTimeout); attemptTimeout = null; }
+
+            if (ok) {
+                reconnecting = false;
+                triedThisRound = 0;
+                backoff = 2000;
+                markProgress();
+                updateSourceLabel(SOURCES[currentSourceIndex], true);
+                hideOverlay(); // playback started → dismiss the tap prompt
+                return;
+            }
+
+            if (err && err.name === 'NotAllowedError') {
+                // Autoplay blocked (no user gesture). Looping play() would spin
+                // forever — ask for a tap instead.
+                reconnecting = false;
+                showStartOverlay('انقر للبدء');
+                return;
+            }
+
+            // This source failed: try the next one immediately within this round.
+            triedThisRound++;
+            if (triedThisRound < SOURCES.length) {
+                attemptSource(currentSourceIndex + 1);
+                return;
+            }
+
+            // All sources failed → back off, then retry from the top source.
+            // No online/offline event needed: this heals when the link returns.
+            reconnecting = false;
+            triedThisRound = 0;
+            updateStatus('error', `لا يوجد اتصال — إعادة المحاولة خلال ${Math.round(backoff / 1000)} ث...`);
+            retryTimeout = setTimeout(() => { currentSourceIndex = 0; reconnect(); }, backoff);
+            backoff = Math.min(Math.round(backoff * 1.5), MAX_BACKOFF);
+        }
+
+        // ---- Playback watchdog ------------------------------------------------
+        // Catches silent buffer stalls (live stream goes quiet with no error):
+        // if currentTime stops advancing while we should be playing, reconnect.
+        let lastTime = 0;
+        let lastProgress = 0;
+        let watchdog = null;
+        const STALL_LIMIT = 10000;
+
+        function monotonicNow() {
+            return (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+        }
+
+        function markProgress() {
+            lastTime = player.currentTime;
+            lastProgress = monotonicNow();
+        }
+
+        function startWatchdog() {
+            if (watchdog) return;
+            markProgress();
+            watchdog = setInterval(() => {
+                if (!hasStarted || player.paused || reconnecting) return;
+                if (player.currentTime > lastTime + 0.1) {
+                    markProgress();
+                } else if (monotonicNow() - lastProgress > STALL_LIMIT) {
+                    console.warn('Watchdog: playback stalled, reconnecting');
+                    reconnect();
+                }
+            }, 3000);
+        }
+
+        // ---- Controls ---------------------------------------------------------
+        function pauseAudio() {
+            clearRetry();
+            if (attemptTimeout) { clearTimeout(attemptTimeout); attemptTimeout = null; }
+            attemptPending = false;
+            reconnecting = false;
+            player.pause();
+            updateStatus('loading', 'متوقف مؤقتاً');
+            updateSourceLabel(SOURCES[currentSourceIndex], false);
+        }
+
         function togglePlay() {
-            if (audio.paused) {
-                playAudio();
+            if (player.paused) {
+                backoff = 2000;
+                reconnect();
             } else {
                 pauseAudio();
             }
         }
 
-        // Retry connection (infinite retries)
-        function retryConnection() {
-            if (retryTimeout) clearTimeout(retryTimeout);
-            
-            if (isOnline) {
-                retryCount++;
-                updateStatus('loading', `إعادة المحاولة (${retryCount})...`);
-                
-                retryTimeout = setTimeout(() => {
-                    playAudio();
-                }, retryDelay);
+        // ---- Start ------------------------------------------------------------
+        // Core: begin (or restart) playback from the top source.
+        function beginPlayback() {
+            if (!hasStarted) {
+                hasStarted = true;
+                enableKeepAwake();
+                startWatchdog();
             }
+            backoff = 2000;
+            currentSourceIndex = 0;
+            reconnect();
         }
 
-        // Handle browser online/offline events (as backup)
-        window.addEventListener('online', () => {
-            console.log('Browser detected network online');
-            // Immediately check if we have actual internet connectivity
-            checkInternetConnectivity().then(online => {
-                if (online) {
-                    isOnline = true;
-                    handleOnline();
-                }
-            });
-        });
+        // Called by a user tap on the overlay (a real gesture). Dismiss the
+        // prompt optimistically and start.
+        function startRadio() {
+            hideOverlay();
+            beginPlayback();
+        }
 
-        window.addEventListener('offline', () => {
-            console.log('Browser detected network offline');
-            isOnline = false;
-            handleOffline();
-        });
+        // Called on page load: attempt autoplay. We do NOT hide the overlay here —
+        // if the browser permits autoplay (kiosk with built-up media engagement),
+        // playback starts and resolveAttempt() hides the overlay; if it's blocked,
+        // the NotAllowedError path keeps the overlay up for a single tap.
+        function tryAutoStart() {
+            beginPlayback();
+        }
 
-        // Audio event listeners
-        audio.addEventListener('playing', () => {
+        // ---- Media events -----------------------------------------------------
+        player.addEventListener('playing', () => {
             updateStatus('playing', '🎵 البث مباشر الآن');
-            // If audio is playing, we definitely have internet
-            isOnline = true;
-            lastSuccessfulCheck = Date.now();
-            retryCount = 0;
+            updateSourceLabel(SOURCES[currentSourceIndex], true);
+            backoff = 2000;
+            markProgress();
+            if (attemptPending) resolveAttempt(true);
         });
 
-        audio.addEventListener('waiting', () => {
-            updateStatus('loading', 'جاري التحميل...');
+        player.addEventListener('timeupdate', markProgress);
+
+        player.addEventListener('waiting', () => {
+            if (hasStarted) updateStatus('loading', 'جاري التحميل...');
         });
 
-        audio.addEventListener('pause', () => {
-            if (!audio.ended && hasStarted) {
+        player.addEventListener('pause', () => {
+            if (!player.ended && hasStarted && !reconnecting && !attemptPending) {
                 updateStatus('loading', 'متوقف مؤقتاً');
             }
         });
 
-        audio.addEventListener('error', (e) => {
-            console.error('Audio error:', e);
-            
-            // Check connectivity when error occurs
-            checkInternetConnectivity().then(online => {
-                isOnline = online;
-                if (online) {
-                    updateStatus('error', 'خطأ في البث - جاري إعادة المحاولة...');
-                    retryConnection();
-                } else {
-                    updateStatus('offline', '❌ لا يوجد اتصال بالإنترنت');
-                }
-            });
-        });
-
-        audio.addEventListener('stalled', () => {
-            console.log('Audio stalled');
-            if (hasStarted && !audio.paused) {
-                // Check if we still have internet
-                checkInternetConnectivity().then(online => {
-                    isOnline = online;
-                    if (online) {
-                        retryConnection();
-                    } else {
-                        handleOffline();
-                    }
-                });
+        player.addEventListener('error', () => {
+            if (!hasStarted) return;
+            if (attemptPending) { resolveAttempt(false); return; }
+            if (!reconnecting) {
+                updateStatus('error', 'خطأ في البث - جاري إعادة المحاولة...');
+                clearRetry();
+                retryTimeout = setTimeout(reconnect, 1000);
             }
         });
 
-        audio.addEventListener('loadstart', () => {
-            if (hasStarted) {
-                updateStatus('loading', 'جاري الاتصال...');
-            }
+        player.addEventListener('stalled', () => {
+            if (hasStarted && !player.paused && !reconnecting) reconnect();
         });
 
-        // Auto-start on page load (try without user interaction)
-        window.addEventListener('load', () => {
-            // Try to start automatically (will work in some browsers/situations)
-            const autoPlayPromise = audio.play();
-            
-            if (autoPlayPromise !== undefined) {
-                autoPlayPromise
-                    .then(() => {
-                        // Autoplay succeeded! Hide overlay
-                        hasStarted = true;
-                        startOverlay.classList.add('hidden');
-                        setTimeout(() => {
-                            startOverlay.style.display = 'none';
-                        }, 500);
-                        updateStatus('playing', '🎵 البث مباشر الآن');
-                        // Start monitoring connectivity
-                        startConnectivityMonitoring();
-                    })
-                    .catch(() => {
-                        // Autoplay blocked - overlay will remain visible
-                        console.log('Autoplay blocked - waiting for user interaction');
-                        updateStatus('loading', 'انقر للبدء');
-                    });
-            }
+        player.addEventListener('loadstart', () => {
+            if (hasStarted) updateStatus('loading', 'جاري الاتصال...');
         });
 
-        // Handle visibility change (tab switching)
-        document.addEventListener('visibilitychange', () => {
-            if (!document.hidden && isOnline && audio.paused && hasStarted) {
-                // Page became visible and audio is paused, try to resume
-                setTimeout(() => {
-                    playAudio();
-                }, 500);
-            }
+        // ---- Network hints (status only; recovery doesn't depend on these) ----
+        window.addEventListener('online', () => {
+            if (hasStarted && player.paused) { backoff = 2000; reconnect(); }
         });
 
-        // Cleanup on page unload
+        window.addEventListener('offline', () => {
+            updateStatus('offline', '❌ لا يوجد اتصال بالإنترنت');
+        });
+
+        // ---- Auto-start on load -----------------------------------------------
+        // Tries to autoplay; if the browser blocks autoplay-with-sound, the
+        // overlay stays up and a single tap starts it.
+        window.addEventListener('load', tryAutoStart);
+
+        // ---- Cleanup ----------------------------------------------------------
         window.addEventListener('beforeunload', () => {
-            if (retryTimeout) clearTimeout(retryTimeout);
-            stopConnectivityMonitoring();
-            audio.pause();
+            clearRetry();
+            if (attemptTimeout) clearTimeout(attemptTimeout);
+            if (watchdog) clearInterval(watchdog);
+            if (canvasDrawInterval) clearInterval(canvasDrawInterval);
+            teardownHls();
+            player.pause();
         });
     </script>
 </body>
 </html>
-
